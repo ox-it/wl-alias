@@ -21,6 +21,7 @@
 
 package org.sakaiproject.alias.impl;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
@@ -51,6 +52,7 @@ import org.sakaiproject.exception.InUseException;
 import org.sakaiproject.exception.PermissionException;
 import org.sakaiproject.memory.api.Cache;
 import org.sakaiproject.memory.api.MemoryService;
+import org.sakaiproject.memory.api.MultiRefCache;
 import org.sakaiproject.site.api.SiteService;
 import org.sakaiproject.time.api.Time;
 import org.sakaiproject.time.api.TimeService;
@@ -87,6 +89,9 @@ public abstract class BaseAliasService implements AliasService, StorageUser
 
 	/** A cache of calls to the service and the results. */
 	protected Cache m_callCache = null;
+	
+	/** A cache of calls to the getAliases calls */
+	protected MultiRefCache m_targetCache = null;
 
 	/**********************************************************************************************************************************************************************************************************************************************************
 	 * Abstractions, etc.
@@ -352,6 +357,8 @@ public abstract class BaseAliasService implements AliasService, StorageUser
 				m_callCache = memoryService().newCache(
 						"org.sakaiproject.alias.api.AliasService.callCache",
 						aliasReference(""));
+				m_targetCache = memoryService().newMultiRefCache(
+						"org.sakaiproject.alias.api.AliasService.targetCache");
 			}
 
 			// register as an entity producer
@@ -570,8 +577,32 @@ public abstract class BaseAliasService implements AliasService, StorageUser
 	 */
 	public List getAliases(String target)
 	{
-		List allForTarget = m_storage.getAll(target);
+		List allForTarget = null;
+		boolean found = false;
+		if (m_targetCache != null)
+		{
+			allForTarget = (List)m_targetCache.get(target);
+		}
+		if (allForTarget == null)
+		{
+			allForTarget = m_storage.getAll(target);
+			if (m_targetCache != null)
+			{
+				Collection dependRefs = null;
+				if (allForTarget != null)
+				{
+					dependRefs = new ArrayList(allForTarget.size());
+					// Need to cache against a set of references.
+					for(Alias alias: (List<Alias>)allForTarget)
+					{
+						dependRefs.add(alias.getReference());
+					}
+				}
 
+				m_targetCache.put(target, allForTarget, target, dependRefs);
+			}
+		}
+		
 		return allForTarget;
 
 	} // getAliases
@@ -757,7 +788,7 @@ public abstract class BaseAliasService implements AliasService, StorageUser
 
 		// complete the edit
 		m_storage.commit(edit);
-
+		
 		// track it
 		eventTrackingService().post(eventTrackingService().newEvent(((BaseAliasEdit) edit).getEvent(), edit.getReference(), true));
 
